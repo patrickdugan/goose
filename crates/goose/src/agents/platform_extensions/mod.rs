@@ -6,6 +6,7 @@ pub mod apps;
 pub mod chatrecall;
 #[cfg(feature = "code-mode")]
 pub mod code_execution;
+pub mod control;
 pub mod developer;
 pub mod ext_manager;
 #[cfg(feature = "scheduler")]
@@ -44,6 +45,20 @@ pub static PLATFORM_EXTENSIONS: Lazy<HashMap<&'static str, PlatformExtensionDef>
                 unprefixed_tools: true,
                 hidden: false,
                 client_factory: |ctx| Some(Box::new(analyze::AnalyzeClient::new(ctx).unwrap())),
+            },
+        );
+
+        map.insert(
+            control::EXTENSION_NAME,
+            PlatformExtensionDef {
+                name: control::EXTENSION_NAME,
+                display_name: "Control",
+                description:
+                    "Show the control module's phase contract each turn and report phases complete (needs GOOSE_CONTROL_CONFIG with phaseSkill)",
+                default_enabled: false,
+                unprefixed_tools: false,
+                hidden: false,
+                client_factory: |ctx| Some(Box::new(control::ControlClient::new(ctx).unwrap())),
             },
         );
 

@@ -38,6 +38,7 @@ use crate::agents::reply_parts::is_tool_visible_to_app;
 use crate::agents::tool_execution::{ToolCallContext, ToolCallNotificationEmitter, ToolCallResult};
 use crate::config::extensions::name_to_key;
 use crate::conversation::message::Message;
+use crate::session::{SessionManager, SessionType};
 
 fn require_str_parameter<'a>(value: &'a Value, name: &str) -> Result<&'a str, ErrorData> {
     let value = value.get(name).ok_or_else(|| {
@@ -180,6 +181,8 @@ pub struct ExtensionLease {
     tool_catalog: Arc<OnceCell<ToolCatalog>>,
     action_required: Arc<ActionRequiredManager>,
     hydrate_mcp_apps: bool,
+    /// Read by the control gate to tell a subagent's calls from its parent's.
+    sessions: Option<Arc<SessionManager>>,
 }
 
 struct ResolvedTool<'a> {
@@ -204,7 +207,13 @@ impl ExtensionLease {
             tool_catalog: Arc::new(OnceCell::new()),
             action_required,
             hydrate_mcp_apps,
+            sessions: None,
         }
+    }
+
+    pub(super) fn with_sessions(mut self, sessions: Arc<SessionManager>) -> Self {
+        self.sessions = Some(sessions);
+        self
     }
 
     async fn tool_catalog(&self) -> &ToolCatalog {
@@ -642,7 +651,13 @@ impl ExtensionLease {
     ) -> Result<ToolCallResult, ErrorData> {
         let resolved = self.resolve_tool(&tool_call.name, None).await?;
         Ok(self
-            .call_resolved(resolved, tool_call.arguments, request, cancellation_token)
+            .call_resolved(
+                resolved,
+                &tool_call.name,
+                tool_call.arguments,
+                request,
+                cancellation_token,
+            )
             .await)
     }
 
@@ -650,28 +665,80 @@ impl ExtensionLease {
         &self,
         tool_call: CallToolRequestParams,
         app_extension: &str,
-        request: CallRequest,
+        mut request: CallRequest,
         cancellation_token: CancellationToken,
     ) -> Result<ToolCallResult, ErrorData> {
         let resolved = self
             .resolve_tool(&tool_call.name, Some(app_extension))
             .await?;
+        request.surface = crate::control::Surface::AppCall;
         Ok(self
-            .call_resolved(resolved, tool_call.arguments, request, cancellation_token)
+            .call_resolved(
+                resolved,
+                &tool_call.name,
+                tool_call.arguments,
+                request,
+                cancellation_token,
+            )
             .await)
+    }
+
+    /// Control gate: every call that reaches an extension through a lease, from the
+    /// state machine, code mode, apps and subagents alike, is proposed before it runs.
+    /// Returns the actor id to attach to tool-gateway calls.
+    async fn control_check(
+        &self,
+        resolved: &ResolvedTool<'_>,
+        tool_name: &str,
+        arguments: Option<&rmcp::model::JsonObject>,
+        request: &CallRequest,
+    ) -> Result<Option<String>, ErrorData> {
+        if !crate::control::enabled() {
+            return Ok(None);
+        }
+        let session = match &self.sessions {
+            Some(sessions) => sessions.get_session(&self.scope_id, false).await.ok(),
+            None => None,
+        };
+        let is_subagent = session
+            .as_ref()
+            .is_some_and(|session| session.session_type == SessionType::SubAgent);
+        let parent_session_id = session.and_then(|session| session.parent_session_id);
+        crate::control::check(crate::control::CallSite {
+            session_id: &self.scope_id,
+            parent_session_id: parent_session_id.as_deref(),
+            is_subagent,
+            request_id: request.tool_call_id.as_deref(),
+            native_name: tool_name,
+            extension: Some(resolved.extension.key.as_str()),
+            actual_tool: resolved.server_name,
+            args: arguments,
+            surface: request.surface,
+        })
+        .await
+        .map(|allowed| allowed.gateway_agent)
     }
 
     async fn call_resolved(
         &self,
         resolved: ResolvedTool<'_>,
+        tool_name: &str,
         arguments: Option<rmcp::model::JsonObject>,
         request: CallRequest,
         cancellation_token: CancellationToken,
     ) -> ToolCallResult {
+        let control_agent = match self
+            .control_check(&resolved, tool_name, arguments.as_ref(), &request)
+            .await
+        {
+            Ok(agent) => agent,
+            Err(denial) => return ToolCallResult::from(Err(denial)),
+        };
         let CallRequest {
             tool_call_id,
             notification_emitter,
             container,
+            surface,
         } = request;
         let client = resolved.extension.client.clone();
         let action_required_stream = self.action_required_stream(tool_call_id.as_deref()).await;
@@ -686,7 +753,9 @@ impl ExtensionLease {
             tool_call_id,
         )
         .with_container(container)
-        .with_extension_lease(Arc::new(self.clone()));
+        .with_extension_lease(Arc::new(self.clone()))
+        .with_surface(surface)
+        .with_control_agent(control_agent);
         let call_context = match emitter {
             Some(emitter) => call_context.with_notification_emitter(emitter),
             None => call_context,
@@ -779,6 +848,8 @@ pub struct CallRequest {
     pub(crate) tool_call_id: Option<String>,
     pub(crate) notification_emitter: Option<ToolCallNotificationEmitter>,
     pub(crate) container: Option<Container>,
+    /// Where the call was dispatched from, for the control gate.
+    pub(crate) surface: crate::control::Surface,
 }
 
 impl CallRequest {
@@ -801,6 +872,7 @@ impl From<&ToolCallContext> for CallRequest {
             tool_call_id: ctx.tool_call_request_id.clone(),
             notification_emitter: ctx.notification_emitter().cloned(),
             container: ctx.container().cloned(),
+            surface: ctx.surface,
         }
     }
 }

@@ -92,10 +92,12 @@ impl ProviderEntry {
         &self,
         extensions: Vec<ExtensionConfig>,
     ) -> Result<Arc<dyn Provider>> {
+        crate::control::check_provider(&self.metadata.name, self.runs_own_tool_loop)?;
         (self.constructor)(extensions, None, self.tls_config.clone(), true).await
     }
 
     pub async fn create(&self, extensions: Vec<ExtensionConfig>) -> Result<Arc<dyn Provider>> {
+        crate::control::check_provider(&self.metadata.name, self.runs_own_tool_loop)?;
         (self.constructor)(extensions, None, self.tls_config.clone(), false).await
     }
 
@@ -104,6 +106,7 @@ impl ProviderEntry {
         extensions: Vec<ExtensionConfig>,
         working_dir: PathBuf,
     ) -> Result<Arc<dyn Provider>> {
+        crate::control::check_provider(&self.metadata.name, self.runs_own_tool_loop)?;
         (self.constructor)(
             extensions,
             Some(working_dir),

@@ -37,6 +37,10 @@ pub struct ToolCallContext {
     container: Option<Container>,
     extension_lease: Option<Arc<ExtensionLease>>,
     notification_emitter: Option<ToolCallNotificationEmitter>,
+    /// Where the call was dispatched from, for the control gate.
+    pub surface: crate::control::Surface,
+    /// Actor id the control gate attaches to tool-gateway calls as `_meta.agentId`.
+    pub control_agent: Option<String>,
 }
 
 impl ToolCallContext {
@@ -52,6 +56,8 @@ impl ToolCallContext {
             container: None,
             extension_lease: None,
             notification_emitter: None,
+            surface: crate::control::Surface::AgentLoop,
+            control_agent: None,
         }
     }
 
@@ -71,6 +77,16 @@ impl ToolCallContext {
 
     pub(crate) fn extension_lease(&self) -> Option<&Arc<ExtensionLease>> {
         self.extension_lease.as_ref()
+    }
+
+    pub fn with_surface(mut self, surface: crate::control::Surface) -> Self {
+        self.surface = surface;
+        self
+    }
+
+    pub fn with_control_agent(mut self, agent: Option<String>) -> Self {
+        self.control_agent = agent;
+        self
     }
 
     pub fn working_dir_str(&self) -> Option<&str> {

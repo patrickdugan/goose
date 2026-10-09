@@ -648,6 +648,7 @@ impl ExtensionManager {
             self.context.session_manager.action_required(),
             self.hydrate_mcp_apps(),
         )
+        .with_sessions(Arc::clone(&self.context.session_manager))
     }
 
     fn new_slot(
