@@ -1134,6 +1134,17 @@ impl Agent {
             .await;
 
         if tool_call.name == FINAL_OUTPUT_TOOL_NAME {
+            if let Err(denial) = crate::control::check_session_call(
+                session,
+                request_id.as_str(),
+                &tool_call.name,
+                tool_call.arguments.as_ref(),
+                crate::control::Surface::FinalOutput,
+            )
+            .await
+            {
+                return (request_id, Err(denial));
+            }
             return if let Some(final_output_tool) = self.final_output_tool.lock().await.as_mut() {
                 let result = final_output_tool.execute_tool_call(tool_call.clone()).await;
                 let result = self.with_post_tool_hook(result, &tool_call, session, &request_id);

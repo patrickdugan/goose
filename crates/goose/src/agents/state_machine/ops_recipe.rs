@@ -338,13 +338,24 @@ impl Operation<Session, GooseEffect> for RecipeOperation {
                 .arguments
                 .as_ref()
                 .map(|arguments| serde_json::Value::Object(arguments.clone()));
-            let output = match run_pre_tool_hooks(
-                &self.hook_manager,
-                session,
-                &request.id,
-                &tool_call.name,
-                tool_input.as_ref(),
-            )
+            let output = match async {
+                crate::control::check_session_call(
+                    session,
+                    &request.id,
+                    &tool_call.name,
+                    tool_call.arguments.as_ref(),
+                    crate::control::Surface::FinalOutput,
+                )
+                .await?;
+                run_pre_tool_hooks(
+                    &self.hook_manager,
+                    session,
+                    &request.id,
+                    &tool_call.name,
+                    tool_input.as_ref(),
+                )
+                .await
+            }
             .instrument(span.clone())
             .await
             {

@@ -39,6 +39,10 @@ pub struct ToolCallContext {
     pub working_dir: Option<PathBuf>,
     pub tool_call_request_id: Option<String>,
     notification_emitter: Option<ToolCallNotificationEmitter>,
+    /// Where the call was dispatched from, for the control gate.
+    pub surface: crate::control::Surface,
+    /// Actor id the control gate attaches to tool-gateway calls as `_meta.agentId`.
+    pub control_agent: Option<String>,
 }
 
 impl ToolCallContext {
@@ -52,7 +56,19 @@ impl ToolCallContext {
             working_dir,
             tool_call_request_id,
             notification_emitter: None,
+            surface: crate::control::Surface::AgentLoop,
+            control_agent: None,
         }
+    }
+
+    pub fn with_surface(mut self, surface: crate::control::Surface) -> Self {
+        self.surface = surface;
+        self
+    }
+
+    pub fn with_control_agent(mut self, agent: Option<String>) -> Self {
+        self.control_agent = agent;
+        self
     }
 
     pub fn working_dir_str(&self) -> Option<&str> {

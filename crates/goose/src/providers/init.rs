@@ -274,7 +274,9 @@ pub async fn inventory_identity(name: &str) -> Result<super::inventory::Inventor
 
 pub async fn create(name: &str, extensions: Vec<ExtensionConfig>) -> Result<Arc<dyn Provider>> {
     let entry = get_from_registry(name).await?;
-    entry.create(extensions).await
+    let provider = entry.create(extensions).await?;
+    crate::control::check_provider(name, provider.manages_own_context())?;
+    Ok(provider)
 }
 
 pub async fn create_with_working_dir(
@@ -283,17 +285,21 @@ pub async fn create_with_working_dir(
     working_dir: PathBuf,
 ) -> Result<Arc<dyn Provider>> {
     let entry = get_from_registry(name).await?;
-    entry.create_with_working_dir(extensions, working_dir).await
+    let provider = entry.create_with_working_dir(extensions, working_dir).await?;
+    crate::control::check_provider(name, provider.manages_own_context())?;
+    Ok(provider)
 }
 
 pub async fn create_with_default_model(
     name: impl AsRef<str>,
     extensions: Vec<ExtensionConfig>,
 ) -> Result<Arc<dyn Provider>> {
-    get_from_registry(name.as_ref())
+    let provider = get_from_registry(name.as_ref())
         .await?
         .create_with_default_model(extensions)
-        .await
+        .await?;
+    crate::control::check_provider(name.as_ref(), provider.manages_own_context())?;
+    Ok(provider)
 }
 
 pub async fn cleanup_provider(name: &str) -> Result<()> {

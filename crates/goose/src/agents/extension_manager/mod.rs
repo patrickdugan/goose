@@ -1300,6 +1300,41 @@ impl ExtensionManager {
             }
         }
 
+        // Control gate: every call that reaches an extension, including calls made
+        // from inside code mode and by subagents, is proposed before it runs.
+        let control_agent = if crate::control::enabled() {
+            let session = self
+                .context
+                .session_manager
+                .get_session(&ctx.session_id, false)
+                .await
+                .ok();
+            let is_subagent = session
+                .as_ref()
+                .is_some_and(|s| s.session_type == crate::session::SessionType::SubAgent);
+            let parent_session_id = session.as_ref().and_then(|s| s.parent_session_id.clone());
+            let surface = if require_app_visibility {
+                crate::control::Surface::AppCall
+            } else {
+                ctx.surface
+            };
+            crate::control::check(crate::control::CallSite {
+                session_id: &ctx.session_id,
+                parent_session_id: parent_session_id.as_deref(),
+                is_subagent,
+                request_id: ctx.tool_call_request_id.as_deref(),
+                native_name: &tool_name_str,
+                extension: Some(resolved.extension_name.as_str()),
+                actual_tool: &resolved.actual_tool_name,
+                args: tool_call.arguments.as_ref(),
+                surface,
+            })
+            .await?
+            .gateway_agent
+        } else {
+            None
+        };
+
         let arguments = tool_call.arguments.clone();
         let client = resolved.client.clone();
         let hydration_client = client.clone();
@@ -1336,7 +1371,9 @@ impl ExtensionManager {
             ctx.session_id.clone(),
             ctx.working_dir.clone(),
             ctx.tool_call_request_id.clone(),
-        );
+        )
+        .with_surface(ctx.surface)
+        .with_control_agent(control_agent);
         let (owned_ctx, tool_call_notifications_receiver) =
             if let Some(notification_emitter) = ctx.notification_emitter().cloned() {
                 (

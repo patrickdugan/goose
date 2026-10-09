@@ -781,6 +781,16 @@ impl McpClientTrait for McpClient {
         if let Some(args) = arguments {
             params = params.with_arguments(args);
         }
+        if let Some(agent) = &ctx.control_agent {
+            // The tool gateway fingerprints the call with this actor id, as the
+            // control gate did, so it finds the lease the gate obtained.
+            params
+                .meta
+                .get_or_insert_default()
+                .0
+                 .0
+                .insert("agentId".to_string(), Value::String(agent.clone()));
+        }
         let protocol_version = {
             let client = self.client.lock().await;
             client.peer_info().map(|info| info.protocol_version.clone())

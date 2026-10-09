@@ -364,7 +364,8 @@ fn create_tool_callback(
     rt: tokio::runtime::Handle,
 ) -> CallbackFn {
     Arc::new(move |args: Option<Value>| {
-        let ctx = ctx.clone();
+        // Calls made from inside a code-mode script are their own surface.
+        let ctx = ctx.clone().with_surface(crate::control::Surface::CodeMode);
         let full_name = full_name.clone();
         let manager = manager.clone();
         let cancellation_token = cancellation_token.clone();
