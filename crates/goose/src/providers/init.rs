@@ -285,7 +285,9 @@ pub async fn create_with_working_dir(
     working_dir: PathBuf,
 ) -> Result<Arc<dyn Provider>> {
     let entry = get_from_registry(name).await?;
-    let provider = entry.create_with_working_dir(extensions, working_dir).await?;
+    let provider = entry
+        .create_with_working_dir(extensions, working_dir)
+        .await?;
     crate::control::check_provider(name, provider.manages_own_context())?;
     Ok(provider)
 }

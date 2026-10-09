@@ -36,7 +36,14 @@ const CONFIG_SCHEMA: &str = "control.goose_hook_config.v1";
 const PROPOSAL_SCHEMA: &str = "control.tool_call_proposal.v1";
 const PROVENANCE_SCHEMA: &str = "control.provenance.v1";
 /// Providers that run tools inside their own agent, out of goose's sight.
-const SELF_EXECUTING_PROVIDERS: &[&str] = &["claude-code", "claude_code", "gemini-cli", "gemini_cli", "codex", "cursor-agent"];
+const SELF_EXECUTING_PROVIDERS: &[&str] = &[
+    "claude-code",
+    "claude_code",
+    "gemini-cli",
+    "gemini_cli",
+    "codex",
+    "cursor-agent",
+];
 
 /// Where in goose a tool call was dispatched from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,7 +116,10 @@ fn state() -> &'static GateState {
 }
 
 fn env_flag(name: &str) -> bool {
-    matches!(std::env::var(name).as_deref(), Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes"))
+    matches!(
+        std::env::var(name).as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes")
+    )
 }
 
 fn load() -> GateState {
@@ -242,7 +252,8 @@ impl Gate {
     }
 
     fn is_gateway(&self, site: &CallSite<'_>) -> bool {
-        site.extension == Some(self.gateway_extension.as_str()) && self.registry_tools.contains(site.actual_tool)
+        site.extension == Some(self.gateway_extension.as_str())
+            && self.registry_tools.contains(site.actual_tool)
     }
 
     fn tool_id<'a>(&self, site: &'a CallSite<'a>) -> &'a str {
@@ -255,7 +266,11 @@ impl Gate {
 
     fn actor(&self, site: &CallSite<'_>) -> (String, Vec<String>) {
         if site.is_subagent {
-            let mut lineage: Vec<String> = site.parent_session_id.map(str::to_string).into_iter().collect();
+            let mut lineage: Vec<String> = site
+                .parent_session_id
+                .map(str::to_string)
+                .into_iter()
+                .collect();
             lineage.push(site.session_id.to_string());
             (format!("{}/{}", self.agent_id, site.session_id), lineage)
         } else {
@@ -273,7 +288,10 @@ impl Gate {
             .await
             .map_err(|_| "control_unavailable".to_string())?;
         let status = response.status();
-        let value: Value = response.json().await.map_err(|_| "control_unavailable".to_string())?;
+        let value: Value = response
+            .json()
+            .await
+            .map_err(|_| "control_unavailable".to_string())?;
         if !status.is_success() {
             let code = value
                 .pointer("/error/code")
@@ -286,7 +304,12 @@ impl Gate {
     }
 
     async fn register_child(&self, agent: &str, lineage: &[String]) -> Result<(), String> {
-        if self.registered_children.lock().map(|set| set.contains(agent)).unwrap_or(false) {
+        if self
+            .registered_children
+            .lock()
+            .map(|set| set.contains(agent))
+            .unwrap_or(false)
+        {
             return Ok(());
         }
         let payload = json!({
@@ -346,10 +369,16 @@ impl Gate {
             "tool": {"id": tool_id, "nativeName": site.native_name, "registryHash": self.registry_hash},
         });
         let decision = self
-            .post("/v1/decide", &json!({"proposal": proposal, "waitMs": self.wait_ms}))
+            .post(
+                "/v1/decide",
+                &json!({"proposal": proposal, "waitMs": self.wait_ms}),
+            )
             .await
             .map_err(|code| deny(format!("control: {code}")))?;
-        let verdict = decision.get("verdict").and_then(Value::as_str).unwrap_or("deny");
+        let verdict = decision
+            .get("verdict")
+            .and_then(Value::as_str)
+            .unwrap_or("deny");
         if verdict == "allow" {
             return Ok(Allowed {
                 gateway_agent: self.is_gateway(site).then_some(agent),
@@ -360,7 +389,11 @@ impl Gate {
             .and_then(Value::as_array)
             .map(|codes| codes.iter().filter_map(Value::as_str).collect())
             .unwrap_or_default();
-        let reasons = if codes.is_empty() { "refused".to_string() } else { codes.join(",") };
+        let reasons = if codes.is_empty() {
+            "refused".to_string()
+        } else {
+            codes.join(",")
+        };
         Err(deny(format!("control: {verdict} {reasons}")))
     }
 }
@@ -369,10 +402,12 @@ impl Gate {
 pub fn fingerprint(run_id: &str, agent_id: &str, tool_id: &str, args: &Value) -> String {
     let material = json!({"agentId": agent_id, "args": args, "runId": run_id, "toolId": tool_id});
     let digest = Sha256::digest(canonical_json(&material).as_bytes());
-    digest.iter().fold(String::with_capacity(64), |mut out, byte| {
-        let _ = write!(out, "{byte:02x}");
-        out
-    })
+    digest
+        .iter()
+        .fold(String::with_capacity(64), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
 }
 
 /// Python's `json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)`.
@@ -446,7 +481,9 @@ mod tests {
     fn fingerprint_matches_the_python_golden_vector() {
         let args = json!({"kind": "sandbox_trade", "amount_units": 10});
         assert_eq!(
-            canonical_json(&json!({"agentId": "root", "args": args, "runId": "run-1", "toolId": "treasury_propose"})),
+            canonical_json(
+                &json!({"agentId": "root", "args": args, "runId": "run-1", "toolId": "treasury_propose"})
+            ),
             r#"{"agentId":"root","args":{"amount_units":10,"kind":"sandbox_trade"},"runId":"run-1","toolId":"treasury_propose"}"#
         );
         assert_eq!(
@@ -457,10 +494,19 @@ mod tests {
 
     #[test]
     fn strings_escape_like_python_ensure_ascii() {
-        assert_eq!(canonical_json(&json!({"to": "zoë"})), r#"{"to":"zo\u00eb"}"#);
-        assert_eq!(canonical_json(&json!("a\"b\\c\n\u{7f}\u{1}")), r#""a\"b\\c\n\u007f\u0001""#);
+        assert_eq!(
+            canonical_json(&json!({"to": "zoë"})),
+            r#"{"to":"zo\u00eb"}"#
+        );
+        assert_eq!(
+            canonical_json(&json!("a\"b\\c\n\u{7f}\u{1}")),
+            r#""a\"b\\c\n\u007f\u0001""#
+        );
         assert_eq!(canonical_json(&json!("🙂")), r#""\ud83d\ude42""#);
-        assert_eq!(canonical_json(&json!({"b": [1, true, null], "a": {}})), r#"{"a":{},"b":[1,true,null]}"#);
+        assert_eq!(
+            canonical_json(&json!({"b": [1, true, null], "a": {}})),
+            r#"{"a":{},"b":[1,true,null]}"#
+        );
     }
 
     #[test]
