@@ -70,6 +70,20 @@ non-loopback request is refused.
 | Phase conveyor on the control module alone: idempotent entry, one move per completion and only from the current phase, the last phase is final, the phase survives a module restart, unknown skills, actors and runs without the engine are refused | 4 of 4 |
 | Phase conveyor through goose over ACP, recorded in the ledger. A write is refused in INSPECT (`tool_profile_not_in_phase`), the model completes INSPECT, the module moves it to ACT, and the same write is admitted (one payment). The model's per-turn context shows INSPECT, then ACT. A model that names the next phase itself is refused (`phase_claim_mismatch`) and stays in INSPECT | 3 of 3 |
 | Goose-Experiments' whole suite with the module's conveyor added | 132 tests, OK (12 skipped without a goose binary set) |
+| With control off, this branch behaves as upstream. The no-fork suite (`tests/test_goose.py`, 13 tests, hooks and gateway tiers) was run against this branch and against unmodified `dbac28060`, built with the same features | Identical outcomes for every test, including two that differ from v1.53.0 because upstream changed (below) |
+| goose's own tests (`cargo test -p goose --lib -- agents:: control::`, features `rustls-tls,scheduler`, WSL) | 486 passed, 5 failed. The same 5 tests fail on unmodified `dbac28060` with these features |
+| `cargo clippy -p goose --all-targets -- -D warnings` (features `rustls-tls,scheduler,acp-http`), `cargo fmt --check` | clean |
+| The platform-extensions prompt snapshot, updated with the `control` section, run with the extension features on Windows | The `control` section matches. The only other difference is the `developer` extension's Windows-specific instructions, which the Linux/macOS snapshot does not contain |
+
+Two upstream changes since v1.53.0 affect the no-fork tiers:
+- **Subagent calls.** The `PreToolUse` hook now sees them, so the hooks tier no longer misses them.
+- **Code-mode calls.** The hook still misses these.
+- **`load_skill`.** The state machine always offers its own `load_skill` tool, even with the skills
+  extension off.
+
+The fork is therefore still needed for code mode, for subagents as their own actors whose gateway leases
+follow them (`_meta.agentId`), and for the conveyor. Fail-closed behaviour is available to hooks too:
+the hooks tier sets `on_failure: block`, and a hook that cannot start blocks the call.
 
 Finding: goose leaves out its per-turn context (MOIM) when the context limit is under 32,000 tokens
 (`MIN_CONTEXT_FOR_MOIM`). Lean-context runs (the harness defaults to 12,000) therefore never show the
