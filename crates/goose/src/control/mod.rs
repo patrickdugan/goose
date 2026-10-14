@@ -111,6 +111,8 @@ struct Gate {
     registered_children: Mutex<HashSet<String>>,
     phase_skill: Option<String>,
     entered_actors: Mutex<HashSet<String>>,
+    /// `state_machine`: goose itself delivers the controller's interventions before each inference.
+    pulls_interventions: bool,
 }
 
 enum GateState {
@@ -276,6 +278,91 @@ pub async fn offered_tools(
     }
 }
 
+/// Whether goose delivers the controller's interventions itself, before each inference.
+pub fn pulls_interventions() -> bool {
+    matches!(state(), GateState::Active(gate) if gate.pulls_interventions)
+}
+
+/// The controller's interventions for the session's actor that are waiting for delivery, each
+/// recorded as delivered (`goose_state_machine`) as it is taken. Returns `(kind, text)` pairs; an
+/// intervention the module would not mark delivered (another channel took it) is left out.
+pub async fn take_interventions(session: &crate::session::Session) -> Vec<(String, String)> {
+    let GateState::Active(gate) = state() else {
+        return Vec::new();
+    };
+    if !gate.pulls_interventions {
+        return Vec::new();
+    }
+    let agent = session_actor(gate, session);
+    let Ok(pending) = gate
+        .get("/v1/interventions", &[("agentId", agent.as_str())])
+        .await
+    else {
+        return Vec::new();
+    };
+    let mut taken = Vec::new();
+    for item in pending.as_array().into_iter().flatten() {
+        let (Some(id), Some(kind), Some(text)) = (
+            item.get("interventionId").and_then(Value::as_str),
+            item.get("kind").and_then(Value::as_str),
+            item.get("text").and_then(Value::as_str),
+        ) else {
+            continue;
+        };
+        let delivered = gate
+            .post(
+                &format!("/v1/interventions/{id}/delivered"),
+                &json!({"channel": "goose_state_machine"}),
+            )
+            .await;
+        if delivered.is_ok() {
+            taken.push((kind.to_string(), text.to_string()));
+        }
+    }
+    taken
+}
+
+/// goose compacted the session's context: tell the control module, whose controller may want
+/// to remind the actor of what the summary dropped (Goose-Experiments K9).
+pub async fn report_compaction(session: &crate::session::Session) {
+    let GateState::Active(gate) = state() else {
+        return;
+    };
+    let body = json!({
+        "kind": "context_compacted",
+        "payload": {"agentId": session_actor(gate, session)},
+    });
+    if let Err(code) = gate.post("/v1/events", &body).await {
+        tracing::warn!(code, "control: compaction not reported");
+    }
+}
+
+fn percent_encode(text: &str) -> String {
+    text.bytes().fold(String::new(), |mut out, byte| {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            out.push(byte as char);
+        } else {
+            let _ = write!(out, "%{byte:02X}");
+        }
+        out
+    })
+}
+
+fn session_actor(gate: &Gate, session: &crate::session::Session) -> String {
+    let site = CallSite {
+        session_id: &session.id,
+        parent_session_id: session.parent_session_id.as_deref(),
+        is_subagent: session.session_type == crate::session::SessionType::SubAgent,
+        request_id: None,
+        native_name: "",
+        extension: None,
+        actual_tool: "",
+        args: None,
+        surface: Surface::AgentLoop,
+    };
+    gate.actor(&site).0
+}
+
 /// One conveyor request for the session's actor: `view`, `enter`, or `complete`
 /// with the phase being completed. Returns the control module's view of the phase.
 pub async fn phase(
@@ -381,6 +468,8 @@ impl Gate {
                 .and_then(Value::as_str)
                 .map(str::to_string),
             entered_actors: Mutex::new(HashSet::new()),
+            pulls_interventions: config.get("interventionChannel").and_then(Value::as_str)
+                == Some("state_machine"),
         })
     }
 
@@ -428,11 +517,30 @@ impl Gate {
     }
 
     async fn post(&self, path: &str, body: &Value) -> Result<Value, String> {
-        let response = self
-            .client
-            .post(format!("{}{}", self.control_url, path))
+        self.answer(
+            self.client
+                .post(format!("{}{}", self.control_url, path))
+                .json(body),
+        )
+        .await
+    }
+
+    async fn get(&self, path: &str, query: &[(&str, &str)]) -> Result<Value, String> {
+        let query = query
+            .iter()
+            .map(|(key, value)| format!("{}={}", percent_encode(key), percent_encode(value)))
+            .collect::<Vec<_>>()
+            .join("&");
+        self.answer(
+            self.client
+                .get(format!("{}{}?{}", self.control_url, path, query)),
+        )
+        .await
+    }
+
+    async fn answer(&self, request: reqwest::RequestBuilder) -> Result<Value, String> {
+        let response = request
             .bearer_auth(&self.shim_token)
-            .json(body)
             .send()
             .await
             .map_err(|_| "control_unavailable".to_string())?;

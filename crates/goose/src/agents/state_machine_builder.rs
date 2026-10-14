@@ -6,12 +6,13 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agents::extension_manager::{ExtensionLease, ExtensionManager};
 use crate::agents::state_machine::{
-    BangShellOperation, CompactionOperation, DoctorOperation, EmptyResponseOperation,
-    ExitOnErrorOperation, GooseEffect, GooseInferenceProvider, GooseInferenceRequestPreparer,
-    InferenceRunner, MaxTurnsOperation, Operation, ProjectOperation, RecipeOperation,
-    RemainingToolCallsOperation, RetryOperation, SkillOperation, SlashCommandOperation,
-    StateMachine, StatusOperation, SteerOperation, SteerQueue, Step, StopHookOperation,
-    SubagentOperation, ToolApprovalOperation, ToolExecutionOperation, ToolPairCompactionOperation,
+    BangShellOperation, CompactionOperation, ControlInterventionOperation, DoctorOperation,
+    EmptyResponseOperation, ExitOnErrorOperation, GooseEffect, GooseInferenceProvider,
+    GooseInferenceRequestPreparer, InferenceRunner, MaxTurnsOperation, Operation, ProjectOperation,
+    RecipeOperation, RemainingToolCallsOperation, RetryOperation, SkillOperation,
+    SlashCommandOperation, StateMachine, StatusOperation, SteerOperation, SteerQueue, Step,
+    StopHookOperation, SubagentOperation, ToolApprovalOperation, ToolExecutionOperation,
+    ToolPairCompactionOperation,
 };
 use crate::agents::subagent_handler::SubagentRunner;
 use crate::hooks::HookManager;
@@ -80,6 +81,8 @@ pub(crate) fn build_state_machine(
         Arc::new(RemainingToolCallsOperation::new(hook_manager.clone())),
         Arc::new(SubagentOperation::new(subagent_runner, cancel.clone())),
         Arc::new(SteerOperation::new(steer_queue, hook_manager.clone())),
+        // The controller's interventions, before the next inference (control module only).
+        Arc::new(ControlInterventionOperation),
         Arc::new(BangShellOperation::new()),
     ];
     if !manages_own_context {

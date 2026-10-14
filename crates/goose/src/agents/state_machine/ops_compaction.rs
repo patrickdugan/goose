@@ -190,6 +190,7 @@ impl Operation<Session, GooseEffect> for CompactionOperation {
         let compacted = result.conversation;
         let usage = result.usage;
         record_chat_usage(&span, &usage);
+        crate::control::report_compaction(session).await;
 
         let command = messages_since_kickoff(conversation)?
             .first()
@@ -315,6 +316,7 @@ impl Operation<Session, GooseEffect> for CompactionOperation {
                     SystemNotificationType::InlineMessage,
                     "Compaction complete",
                 ));
+                crate::control::report_compaction(session).await;
                 applied([GooseEffect::CompactConversation {
                     conversation: compacted,
                     usage: Some(usage),

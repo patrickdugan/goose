@@ -78,6 +78,7 @@ non-loopback request is refused.
 | Gate coverage carried over from v1.53.0 (`tests/test_goose_fork.py`). Every call is proposed (C1). A refused call never reaches the gateway (C2). Control module down blocks every call (C3). Code-mode calls are their own surface (C9). A subagent is its own actor, and its lease reaches the gateway (C10). An unusable config blocks every call | 10 of 10. Both test classes now take the same path, since the state machine is the only loop |
 | Phase conveyor on the control module alone: idempotent entry, one move per completion and only from the current phase, the last phase is final, the phase survives a module restart, the admissible-tool view follows the phase, unknown skills, actors and runs without the engine are refused | 5 of 5 |
 | Phase conveyor through goose over ACP, recorded in the ledger. In INSPECT the model is offered the read and the phase tool but not the write. After it completes INSPECT, the module moves it to ACT, the write is offered, and the write is admitted (one payment). The model's per-turn context shows INSPECT, then ACT. A write called in INSPECT anyway is answered as unavailable and never runs. A code-mode script that calls the write in INSPECT is proposed (`code_mode`) and refused (`tool_profile_not_in_phase`). A model that names the next phase itself is refused (`phase_claim_mismatch`) and stays in INSPECT. Below a 32k context the conveyor still holds | 5 of 5 |
+| Controller channel through goose over ACP. K8: after a refusal, the controller's correction is delivered by goose's own operation (`goose_state_machine`), before goose's next inference, and not on the gateway trailer. K9: after `/compact`, goose reports `context_compacted`, the controller's reminder is delivered, and only then does the next proposal come | 2 of 2 |
 | Goose-Experiments' whole suite with the module's conveyor added | 132 tests, OK (12 skipped without a goose binary set) |
 | With control off, this branch behaves as upstream. The no-fork suite (`tests/test_goose.py`, 13 tests, hooks and gateway tiers) was run against this branch and against unmodified `dbac28060`, built with the same features | Identical outcomes for every test, including two that differ from v1.53.0 because upstream changed (below) |
 | goose's own tests (`cargo test -p goose --lib -- agents:: control::`, features `rustls-tls,scheduler`, WSL) | 486 passed, 5 failed. The same 5 tests fail on unmodified `dbac28060` with these features |
@@ -99,6 +100,21 @@ Finding: goose leaves out its per-turn context (MOIM) when the context limit is 
 model its phase in that context. The model still learns the phase from the extension's instructions,
 from `phase_complete`'s result and from refusals, and the conveyor holds either way. A test pins this
 behaviour.
+
+### 3. The controller, heard inside the state machine
+
+- **Interventions.** With `interventionChannel: state_machine` in the control config, a
+  `ControlInterventionOperation` runs after the tool operations and before inference. It takes the
+  controller's pending interventions for the session's actor (corrections, reminders), records each
+  one as delivered on channel `goose_state_machine`, and puts them in front of the model as one
+  agent-only message. That message does not move the turn's kickoff. Until delivery the interventions
+  wait in the control ledger, so a compaction in between loses none.
+- **No harness needed.** This replaces the harness thread that steered goose over ACP; it runs in
+  every goose front end.
+- **Compactions.** goose reports both automatic compactions and `/compact` to the control module
+  (`context_compacted`). A controller can then remind the actor of what the summary dropped.
+- **Holds and questions.** A `hold` is a refusal at the gate. `ask_principal` escalates: the gate waits
+  `waitMs` for the principal's answer at the control module, then refuses.
 
 ## Configuration
 
