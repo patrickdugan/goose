@@ -44,17 +44,26 @@ now the only loop, so `GOOSE_STATE_MACHINE` no longer selects anything.
 ### 2. Phase contracts (Hermes Lite) through goose
 
 - **Who owns the conveyor.** The control module, not goose and not the model.
-- **Entering.** The gate starts each actor at the contract's first phase before its first proposal
-  (`POST /v1/phase`, `op: enter`). The call is idempotent: a restarted goose is told the phase the
-  ledger already holds.
+- **Entering.** goose starts each actor at the contract's first phase the first time it offers that actor
+  tools, or at its first proposal if that comes first (`POST /v1/phase`, `op: enter`). The call is
+  idempotent: a restarted goose is told the phase the ledger already holds.
 - **Moving on.** A new `control` platform extension offers the model one tool,
   `control__phase_complete {phase}`. The module accepts it only when `phase` is the actor's current
   phase. It then moves the actor to the next phase of the contract and records `phase_entered`. The model
   never names the phase it moves to, so it cannot skip ahead.
 - **What the model sees.** The same extension puts the current phase and its tool profiles into the
   model's context every turn, through goose's top-of-mind (MOIM) channel.
-- **Enforcement.** The `phase-contract-v1` engine refuses a consequential call whose tool profile is not
-  in the current phase (`tool_profile_not_in_phase`).
+- **Tools offered.** Under a phase contract, the tool-execution operation offers the model only the tools
+  the module would admit now (`ops_toolcalling.rs`, `control::offered_tools`). Those are tools that are
+  registered, and either not consequential or with a profile in the current phase. A call to a tool goose
+  did not offer is answered as unavailable before approval and never runs. If the module does not
+  answer, goose offers nothing.
+- **Enforcement.** The gate remains the enforcement point. The `phase-contract-v1` engine refuses a
+  consequential call whose tool profile is not in the current phase (`tool_profile_not_in_phase`). This
+  matters for code-mode scripts, which can call any tool of the session whether it was offered or not.
+- **No separate pre-approval operation.** It is not needed. With tools filtered at inference, an
+  out-of-phase call reaches approval only when the phase changes between inference and approval, and
+  then the gate refuses it at dispatch.
 - **Restarts and compaction.** The phase lives in the control ledger, outside the conversation.
   Compaction cannot change it, and a restart reads it back.
 
@@ -67,8 +76,8 @@ non-loopback request is refused.
 | Check | Result |
 |---|---|
 | Gate coverage carried over from v1.53.0 (`tests/test_goose_fork.py`). Every call is proposed (C1). A refused call never reaches the gateway (C2). Control module down blocks every call (C3). Code-mode calls are their own surface (C9). A subagent is its own actor, and its lease reaches the gateway (C10). An unusable config blocks every call | 10 of 10. Both test classes now take the same path, since the state machine is the only loop |
-| Phase conveyor on the control module alone: idempotent entry, one move per completion and only from the current phase, the last phase is final, the phase survives a module restart, unknown skills, actors and runs without the engine are refused | 4 of 4 |
-| Phase conveyor through goose over ACP, recorded in the ledger. A write is refused in INSPECT (`tool_profile_not_in_phase`), the model completes INSPECT, the module moves it to ACT, and the same write is admitted (one payment). The model's per-turn context shows INSPECT, then ACT. A model that names the next phase itself is refused (`phase_claim_mismatch`) and stays in INSPECT | 3 of 3 |
+| Phase conveyor on the control module alone: idempotent entry, one move per completion and only from the current phase, the last phase is final, the phase survives a module restart, the admissible-tool view follows the phase, unknown skills, actors and runs without the engine are refused | 5 of 5 |
+| Phase conveyor through goose over ACP, recorded in the ledger. In INSPECT the model is offered the read and the phase tool but not the write. After it completes INSPECT, the module moves it to ACT, the write is offered, and the write is admitted (one payment). The model's per-turn context shows INSPECT, then ACT. A write called in INSPECT anyway is answered as unavailable and never runs. A code-mode script that calls the write in INSPECT is proposed (`code_mode`) and refused (`tool_profile_not_in_phase`). A model that names the next phase itself is refused (`phase_claim_mismatch`) and stays in INSPECT. Below a 32k context the conveyor still holds | 5 of 5 |
 | Goose-Experiments' whole suite with the module's conveyor added | 132 tests, OK (12 skipped without a goose binary set) |
 | With control off, this branch behaves as upstream. The no-fork suite (`tests/test_goose.py`, 13 tests, hooks and gateway tiers) was run against this branch and against unmodified `dbac28060`, built with the same features | Identical outcomes for every test, including two that differ from v1.53.0 because upstream changed (below) |
 | goose's own tests (`cargo test -p goose --lib -- agents:: control::`, features `rustls-tls,scheduler`, WSL) | 486 passed, 5 failed. The same 5 tests fail on unmodified `dbac28060` with these features |

@@ -204,6 +204,78 @@ pub fn phase_skill() -> Option<&'static str> {
     }
 }
 
+/// The tools to offer the model now. With a phase contract, only those the control
+/// module would admit in the actor's current phase. The actor is started on the
+/// conveyor first, so its first turn already shows its first phase. If the module
+/// does not answer, nothing is offered; every call would be refused anyway.
+pub async fn offered_tools(
+    session: &crate::session::Session,
+    tools: Vec<rmcp::model::Tool>,
+) -> Vec<rmcp::model::Tool> {
+    let GateState::Active(gate) = state() else {
+        return tools;
+    };
+    let Some(skill) = gate.phase_skill.as_deref() else {
+        return tools;
+    };
+    let site = CallSite {
+        session_id: &session.id,
+        parent_session_id: session.parent_session_id.as_deref(),
+        is_subagent: session.session_type == crate::session::SessionType::SubAgent,
+        request_id: None,
+        native_name: "",
+        extension: None,
+        actual_tool: "",
+        args: None,
+        surface: Surface::AgentLoop,
+    };
+    let (agent, lineage) = gate.actor(&site);
+    let ids: Vec<String> = tools
+        .iter()
+        .map(|tool| gate.tool_id_for_name(&tool.name))
+        .collect();
+    let admissible = async {
+        if site.is_subagent {
+            gate.register_child(&agent, &lineage).await?;
+        }
+        let view = gate
+            .post(
+                "/v1/phase",
+                &json!({"agentId": agent, "op": "enter", "skillId": skill, "tools": ids}),
+            )
+            .await?;
+        gate.mark_entered(&agent);
+        Ok::<HashSet<String>, String>(
+            view.get("admissible")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
+        )
+    }
+    .await;
+    match admissible {
+        Ok(admissible) => tools
+            .into_iter()
+            .zip(ids)
+            .filter(|(_, id)| admissible.contains(id))
+            .map(|(tool, _)| tool)
+            .collect(),
+        Err(code) => {
+            tracing::warn!(
+                code,
+                "control: no tools offered, the control module did not answer"
+            );
+            Vec::new()
+        }
+    }
+}
+
 /// One conveyor request for the session's actor: `view`, `enter`, or `complete`
 /// with the phase being completed. Returns the control module's view of the phase.
 pub async fn phase(
@@ -317,6 +389,22 @@ impl Gate {
             && self.registry_tools.contains(site.actual_tool)
     }
 
+    /// The registry id for a tool as goose names it to the model: a gateway tool's
+    /// own name without goose's `<extension>__` prefix, any other tool's full name.
+    fn tool_id_for_name(&self, name: &str) -> String {
+        name.strip_prefix(self.gateway_extension.as_str())
+            .and_then(|rest| rest.strip_prefix("__"))
+            .filter(|rest| self.registry_tools.contains(*rest))
+            .unwrap_or(name)
+            .to_string()
+    }
+
+    fn mark_entered(&self, agent: &str) {
+        if let Ok(mut set) = self.entered_actors.lock() {
+            set.insert(agent.to_string());
+        }
+    }
+
     fn tool_id<'a>(&self, site: &'a CallSite<'a>) -> &'a str {
         if self.is_gateway(site) {
             site.actual_tool
@@ -411,9 +499,7 @@ impl Gate {
             &json!({"agentId": agent, "op": "enter", "skillId": skill}),
         )
         .await?;
-        if let Ok(mut set) = self.entered_actors.lock() {
-            set.insert(agent.to_string());
-        }
+        self.mark_entered(agent);
         Ok(())
     }
 

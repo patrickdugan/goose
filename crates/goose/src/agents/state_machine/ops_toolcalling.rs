@@ -839,11 +839,13 @@ impl Operation<Session, GooseEffect> for ToolExecutionOperation {
     }
 
     async fn inference_tools(&self, session: &Session) -> Result<Vec<Tool>> {
-        Ok(self
+        let tools = self
             .lease(session)
             .await?
             .tools_excluding(crate::skills::EXTENSION_NAME)
-            .await)
+            .await;
+        // Under a phase contract, only the tools the current phase admits.
+        Ok(crate::control::offered_tools(session, tools).await)
     }
 
     async fn moim_parts(
